@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Grab Title",
+  "version": "1.0",
+  "description": "Copies current page as [Title](URL) on click, or just URL on right-click context menu.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "contextMenus"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Copy Markdown Link"
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
