@@ -1,68 +1,112 @@
-// 1. Set up the context menu when the extension is installed
+// 1. Set up context menus
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "copy-raw-url",
     title: "Copy URL only",
-    contexts: ["action"] // 'action' makes it appear on the extension icon context menu
+    contexts: ["action"]
+  });
+  chrome.contextMenus.create({
+    id: "copy-rich-text",
+    title: "Copy as Rich Link",
+    contexts: ["action"]
   });
 });
 
 /**
- * This function is injected into the webpage to perform the copy action.
- * It uses a fallback method (textarea) to ensure compatibility across different 
- * page states where the Clipboard API might be restricted.
+ * This function runs INSIDE the web page (not the background).
+ * It has full access to the DOM and the window's Clipboard API.
  */
-function copyToClipboard(text) {
-  // Try the modern Clipboard API first
-  navigator.clipboard.writeText(text).then(() => {
-    console.log("Copied to clipboard:", text);
-  }).catch(() => {
-    // Fallback if the Clipboard API fails or lacks focus
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
+async function copyInsideTab(text, html = null) {
+  try {
+    // 1. Try Modern Async API
+    if (typeof ClipboardItem !== "undefined") {
+      const blobs = {
+        "text/plain": new Blob([text], { type: "text/plain" })
+      };
+      
+      if (html) {
+        blobs["text/html"] = new Blob([html], { type: "text/html" });
+      }
+
+      await navigator.clipboard.write([new ClipboardItem(blobs)]);
+      console.log("Copied via ClipboardItem API");
+      return;
+    } 
     
-    // Ensure the textarea is part of the DOM but not visible
-    textArea.style.position = "fixed";
-    textArea.style.left = "-9999px";
-    textArea.style.top = "0";
-    document.body.appendChild(textArea);
+    // 2. Fallback for simple text (if ClipboardItem missing)
+    if (!html) {
+      await navigator.clipboard.writeText(text);
+      console.log("Copied via writeText API");
+      return;
+    }
+
+    throw new Error("Clipboard API unavailable");
+
+  } catch (err) {
+    // 3. Ultimate Fallback: document.execCommand (Legacy but robust)
+    console.warn("Clipboard API failed, trying execCommand fallback", err);
     
-    textArea.focus();
-    textArea.select();
+    const div = document.createElement("div");
+    // Prevent scrolling to bottom
+    div.style.position = "fixed";
+    div.style.left = "-9999px";
+    div.style.top = "0";
     
-    try {
-      document.execCommand('copy');
-      console.log("Copied via fallback:", text);
-    } catch (err) {
-      console.error('Fallback copy failed', err);
+    if (html) {
+      div.innerHTML = html;
+    } else {
+      div.textContent = text;
     }
     
-    document.body.removeChild(textArea);
-  });
+    document.body.appendChild(div);
+    
+    const selection = window.getSelection();
+    const range = document.createRange();
+    
+    try {
+      range.selectNodeContents(div);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      document.execCommand("copy");
+      console.log("Copied via execCommand");
+    } catch (e) {
+      console.error("All copy methods failed", e);
+    } finally {
+      document.body.removeChild(div);
+      selection.removeAllRanges();
+    }
+  }
 }
 
-// 2. Handle the Left-Click (Action Icon) -> Markdown Format
-chrome.action.onClicked.addListener((tab) => {
-  if (!tab.url) return; // Ignore internal browser pages like chrome://
-
-  const markdownLink = `[${tab.title}](${tab.url})`;
+// 2. Helper to inject the script
+function injectCopyScript(tab, text, html = null) {
+  if (!tab.id || !tab.url.startsWith("http")) return; // Skip restricted pages (chrome://)
 
   chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: copyToClipboard,
-    args: [markdownLink]
-  }).catch((err) => console.error("Script injection failed", err));
+    func: copyInsideTab,
+    args: [text, html]
+  }).catch((err) => {
+    console.error("Failed to inject script:", err);
+  });
+}
+
+// 3. Handle Left-Click (Icon) -> Markdown
+chrome.action.onClicked.addListener((tab) => {
+  if (!tab.url) return;
+  const text = `[${tab.title}](${tab.url})`;
+  injectCopyScript(tab, text, null);
 });
 
-// 3. Handle the Right-Click (Context Menu) -> Raw URL
+// 4. Handle Right-Click (Context Menu)
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === "copy-raw-url") {
-    if (!tab.url) return;
+  if (!tab.url) return;
 
-    chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: copyToClipboard,
-      args: [tab.url]
-    }).catch((err) => console.error("Script injection failed", err));
+  if (info.menuItemId === "copy-raw-url") {
+    injectCopyScript(tab, tab.url, null);
+  } else if (info.menuItemId === "copy-rich-text") {
+    const html = `<a href="${tab.url}">${tab.title}</a>`;
+    const text = `[${tab.title}](${tab.url})`;
+    injectCopyScript(tab, text, html);
   }
 });
