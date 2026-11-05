@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Grab Title",
   "version": "1.0",
-  "description": "Copies current page as [Title](URL) on click, or just URL on right-click context menu.",
+  "description": "Copies current page as [Title](URL) on click, or just URL on right-click context menu. Right-click an image to copy it as ![alt](src).",
   "permissions": [
     "activeTab",
     "scripting",

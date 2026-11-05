@@ -10,6 +10,11 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "Copy as Rich Link",
     contexts: ["action"]
   });
+  chrome.contextMenus.create({
+    id: "copy-image-markdown",
+    title: "Copy Image as Markdown",
+    contexts: ["image"]
+  });
 });
 
 /**
@@ -78,6 +83,30 @@ async function copyInsideTab(text, html = null) {
   }
 }
 
+// Markdown/HTML escaping helpers (background-side, run before text is sent to the tab)
+
+// Link/alt text: keep on one line and stop "[" / "]" / "\" from breaking the syntax
+function mdText(s) {
+  return String(s).replace(/\s+/g, " ").trim().replace(/[\\\[\]]/g, "\\$&");
+}
+
+// Link destination: spaces and parentheses would end the URL early
+function mdUrl(s) {
+  return String(s).replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function markdownLink(tab) {
+  return `[${mdText(tab.title || tab.url)}](${mdUrl(tab.url)})`;
+}
+
 // 2. Helper to inject the script
 function injectCopyScript(tab, text, html = null) {
   if (!tab.id || !tab.url.startsWith("http")) return; // Skip restricted pages (chrome://)
@@ -91,22 +120,47 @@ function injectCopyScript(tab, text, html = null) {
   });
 }
 
+/**
+ * Runs INSIDE the web page: finds the right-clicked <img> by its src
+ * and returns its alt text (or title) so it can be used as Markdown alt text.
+ */
+function findImageAlt(srcUrl) {
+  const img = Array.from(document.images).find((i) => i.currentSrc === srcUrl || i.src === srcUrl);
+  return (img && (img.alt || img.title)) || "";
+}
+
+async function copyImageMarkdown(info, tab) {
+  let alt = "";
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [info.frameId || 0] },
+      func: findImageAlt,
+      args: [info.srcUrl]
+    });
+    alt = result?.result || "";
+  } catch (err) {
+    console.error("Failed to read image alt text:", err);
+  }
+
+  injectCopyScript(tab, `![${mdText(alt) || "image"}](${mdUrl(info.srcUrl)})`, null);
+}
+
 // 3. Handle Left-Click (Icon) -> Markdown
 chrome.action.onClicked.addListener((tab) => {
   if (!tab.url) return;
-  const text = `[${tab.title}](${tab.url})`;
-  injectCopyScript(tab, text, null);
+  injectCopyScript(tab, markdownLink(tab), null);
 });
 
 // 4. Handle Right-Click (Context Menu)
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab.url) return;
 
-  if (info.menuItemId === "copy-raw-url") {
+  if (info.menuItemId === "copy-image-markdown") {
+    copyImageMarkdown(info, tab);
+  } else if (info.menuItemId === "copy-raw-url") {
     injectCopyScript(tab, tab.url, null);
   } else if (info.menuItemId === "copy-rich-text") {
-    const html = `<a href="${tab.url}">${tab.title}</a>`;
-    const text = `[${tab.title}](${tab.url})`;
-    injectCopyScript(tab, text, html);
+    const html = `<a href="${escapeHtml(tab.url)}">${escapeHtml(tab.title || tab.url)}</a>`;
+    injectCopyScript(tab, markdownLink(tab), html);
   }
 });
